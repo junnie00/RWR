@@ -1,85 +1,124 @@
-<div align="center">
+# Reasoning Warm-up: Scaling Label-free RL via Verifiable Surrogate Rewards
 
-# Reasoning Warm-up
-### Scaling Label-free RL via Verifiable Surrogate Rewards
+**NeurIPS 2026**
 
-**NeurIPS 2026 Manuscript**
+Jun Nie<sup>1,2</sup>, Bo Han<sup>2</sup>, Jiaqi Fan<sup>3</sup>, Yonggang Zhang<sup>4</sup>, Xinmei Tian<sup>1</sup>, Dahai Yu<sup>3</sup>, Michael Ng<sup>2</sup>
 
-[![Code Release](https://img.shields.io/badge/Code-Coming%20Soon-lightgrey)](#code-release)
-[![Research](https://img.shields.io/badge/Research-Label--free%20RL-blue)](#overview)
+<sup>1</sup>University of Science and Technology of China · <sup>2</sup>Hong Kong Baptist University  
+<sup>3</sup>TCL Corporate Research (HK) Co., Ltd. · <sup>4</sup>The Hong Kong University of Science and Technology, HKGAI
 
-</div>
+> **Verify the warm-up. Reinforce the reasoning.**  
+> Reasoning Warm-up Reinforcement Learning (**RWR**) turns an automatically verifiable auxiliary task into a reward for the **entire reasoning trajectory**, without using the main problem's ground-truth answer during RL optimization.
 
-## Overview
+[Core idea](#core-idea) · [Reward and optimization](#reward-and-optimization) · [Results](#results) · [Code release](#code-release) · [Citation](#citation)
 
-**Reasoning Warm-up Reinforcement Learning (RWR)** investigates how to improve large language model reasoning through reinforcement learning *without using ground-truth answers to the main tasks as training rewards*.
+## Core idea
 
-Many label-free RL approaches construct pseudo-rewards from a model's own generations, such as self-consistency or majority voting. These signals may be misleading on complex, multi-step problems: a model can repeatedly produce mutually consistent but incorrect reasoning trajectories.
+**Where can RL get a useful reward when the main-task answer is unavailable?**
 
-RWR explores an alternative: **verifiable surrogate rewards derived from deterministic auxiliary tasks**. The main-task answer need not be verified during optimization.
+Agreement alone is not enough: a model can generate several solutions that are consistent with one another but all wrong. RWR introduces a different source of feedback—a short, deterministic auxiliary task that can be checked exactly by a program.
 
-## Motivation: The Reasoning Warm-up Phenomenon
+The model solves this **warm-up task first**, then continues with the original reasoning problem in the same response. Our motivating observation is that trajectories with successful auxiliary reasoning are more likely to solve the subsequent main problem than trajectories with unsuccessful auxiliary reasoning. We call this association **Reasoning Warm-up**.
 
-Our research is motivated by an empirical phenomenon termed **Reasoning Warm-up**: when a model successfully completes an exactly verifiable auxiliary task before tackling a difficult reasoning problem, its success probability on the subsequent main task increases.
+The auxiliary task is **not a decomposition of the main problem**, and its construction does not require the main answer. Its purpose is to provide an observable signal for selecting and reinforcing full reasoning trajectories.
 
-This observation motivates using auxiliary-task verification as feedback for reasoning trajectories. Crucially, **correctness on the auxiliary task is a surrogate signal, not proof that the main-task answer is correct**.
+<details>
+<summary><strong>A concrete warm-up example</strong></summary>
 
-## Method
-
-RWR integrates deterministic auxiliary tasks into both generation and policy optimization:
-
-1. **Auxiliary task construction.** Prepare a deterministic task whose answer can be verified exactly.
-2. **Auxiliary-augmented rollout.** Generate a trajectory that first addresses the auxiliary task and then the target reasoning problem.
-3. **Verifiable surrogate reward.** Check the auxiliary-task answer with its verifier to obtain trajectory-level feedback, without consulting the main-task ground-truth answer.
-4. **Reinforcement learning.** Optimize the policy using the auxiliary-verification-based reward signal.
+An illustrative two-part prompt:
 
 ```text
-  Main reasoning problem
-    (no reward label)
-           |
-           v
-  Deterministic auxiliary task
-           |
-           v
-  Auxiliary-augmented rollout
-     /                 \
-    v                   v
- Auxiliary answer    Main-task answer
-    |                   |
-    v                   | (not checked for reward)
- Exact verifier         |
-    |                   |
-    v                   |
- Surrogate reward ------+
-    |
-    v
-  Policy optimization
+Task 1 — Warm-up
+Read the sequence: 820, 937, 820, 515, 123, 755, 783, 353, 544.
+Count from the end and return the 6th number inside <aux>...</aux>.
+
+Task 2 — Main problem
+Solve the original mathematical reasoning problem.
+Put its final answer inside \boxed{...}.
 ```
 
-Unlike purely self-referential pseudo-rewards, the auxiliary feedback is grounded in an **external, exact verifier**.
+For Task 1, the verifier computes the target `515` directly from the sequence. It can therefore check `<aux>515</aux>` without knowing the answer to Task 2.
 
-## Research Scope
+The paper also studies other programmatically generated auxiliary tasks, including summing numbers and finding a maximum. The main experiments use memory-based auxiliary tasks.
 
-The manuscript investigates the Reasoning Warm-up phenomenon, proposes the RWR framework, develops theoretical analysis, and evaluates the approach on reasoning benchmarks. Please refer to the manuscript for detailed experimental settings, quantitative results, and limitations.
+</details>
 
-## Code Release
+## Reward and optimization
 
-> **Coming soon.** This repository is currently a public project landing page. The training and evaluation implementation, configurations, and reproducibility instructions have not yet been released.
+RWR changes **where the reward comes from** while using GRPO-style policy optimization.
 
-Installation, training, and evaluation instructions will accompany the code release.
+```mermaid
+flowchart LR
+    P["Warm-up task + main problem"] --> T["Sample full trajectories"]
+    T --> F["Check output format"]
+    T --> A["Verify auxiliary answer"]
+    F --> R["RWR reward"]
+    A --> R
+    R --> U["GRPO update"]
+    T -->|"All response tokens"| U
+```
+
+For each auxiliary–main trajectory $\tau$, let $F(\tau)$ indicate valid output format and $A(\tau)$ indicate a correct auxiliary answer. The reward is
+
+$$
+R(\tau)=F(\tau)\left(\frac{1}{2}+\frac{1}{2}A(\tau)\right).
+$$
+
+| Output format | Auxiliary answer | Reward |
+| :--- | :--- | :---: |
+| Invalid | Not evaluated | 0 |
+| Valid | Incorrect | 0.5 |
+| Valid | Correct | 1 |
+
+The format check validates the required answer fields; **it does not verify the main answer's correctness**.
+
+For each main problem, RWR samples a group of trajectories, computes group-relative advantages from these rewards, and applies each trajectory's advantage to **all its generated tokens**, including the main-task continuation. The auxiliary task is therefore neither a separate pretraining objective nor just an inference-time prompt: its verification outcome supplies the learning signal for the combined response.
+
+**Label-free refers to the main-task answer labels.** Auxiliary targets are generated automatically and checked exactly. Their usefulness as surrogate rewards depends on alignment between auxiliary success and downstream reasoning quality.
+
+## Results
+
+The paper studies MATH and DAPO-14k as training sets. Evaluation covers mathematical reasoning on **MATH500, GSM8K, AMC, and AIME24**, as well as instruction following and broader knowledge on **IFEval and MMLU-Pro**.
+
+### Selected results: MATH500 and GSM8K
+
+Reported pass@1 accuracy (%) after training on **MATH**. Each entry shows **before RL → RWR**, transcribed from the manuscript's main comparison table.
+
+| Backbone | MATH500 | GSM8K |
+| :--- | :---: | :---: |
+| Qwen3-8B-Base | 72.40 → **80.80** | 27.82 → **93.18** |
+| Qwen2.5-7B | 60.20 → **66.60** | 24.71 → **88.66** |
+| Llama-3.2-3B-Instruct | 39.20 → **48.20** | 65.73 → **79.23** |
+
+Main-task ground-truth answers are withheld from **RWR reward computation**, not from evaluation. The paper also compares against Self-Certainty, Entropy, Majority Voting, Co-rewarding, and a ground-truth-reward reference.
+
+<details>
+<summary><strong>Reward ablation: is format reward alone enough?</strong></summary>
+
+Qwen3-8B-Base trained on MATH; reported pass@1 accuracy (%) on the same two benchmarks.
+
+| Reward variant | MATH500 | GSM8K |
+| :--- | :---: | :---: |
+| Full RWR reward | **80.80** | **93.18** |
+| Without auxiliary reward | 62.80 | 86.66 |
+| Without format reward | 75.60 | 91.58 |
+
+Removing the auxiliary reward reduces performance on both benchmarks. In this experiment, encouraging valid output format alone does not recover the gains of the full reward.
+
+</details>
+
+## Code release
+
+**Code coming soon.** Training and evaluation code, configurations, and usage instructions will be added here with the implementation.
 
 ## Citation
 
-**Reasoning Warm-up: Scaling Label-free RL via Verifiable Surrogate Rewards**
+```bibtex
+@misc{nie2026reasoningwarmup,
+  title  = {Reasoning Warm-up: Scaling Label-free RL via Verifiable Surrogate Rewards},
+  author = {Nie, Jun and Han, Bo and Fan, Jiaqi and Zhang, Yonggang and Tian, Xinmei and Yu, Dahai and Ng, Michael},
+  year   = {2026}
+}
+```
 
-*NeurIPS 2026 manuscript.*
-
-A public paper link and verified BibTeX entry will be added when available. This label does not by itself indicate an acceptance decision.
-
-## Questions
-
-Please use the [GitHub Issues](https://github.com/junnie00/RWR/issues) page for questions and project updates.
-
----
-
-<div align="center"><sub>RWR · Reasoning Warm-up Reinforcement Learning</sub></div>
+Questions about the method or code release can be raised in [GitHub Issues](https://github.com/junnie00/RWR/issues).
