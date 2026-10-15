@@ -66,7 +66,7 @@ The manuscript investigates the Reasoning Warm-up phenomenon, proposes the RWR f
 
 > **Coming soon.** This repository is currently a public project landing page. The training and evaluation implementation, configurations, and reproducibility instructions have not yet been released.
 
-We will add installation and usage instructions alongside runnable code. No unverified command, checkpoint, or benchmark result is advertised here.
+Installation, training, and evaluation instructions will accompany the code release.
 
 ## Citation
 
